@@ -8,6 +8,7 @@ import json
 from transformers import GenerationConfig,  AutoTokenizer
 from layers import LatentModel
 from reasoning_dataset import  LatentRDataset
+from rmdr_sequential import RMDRDataset
 from transformers import  LogitsProcessorList, TemperatureLogitsWarper
 from LogitProcesser import CFEnhancedLogitsProcessor, get_hash, get_prefix_data
 
@@ -29,11 +30,16 @@ def main(
     seed: int = 0,
     temperature: float=1.0,
     guidance_scale: float=1.0,
-    length_penalty: float=1.0
+    length_penalty: float=1.0,
+    # RMDR params
+    use_rmdr: bool = False,
+    data_path: str = "/llm-reco-ssd-share/baohonghui/Baselines/RMDR/dataset",
+    dataset: str = "m_IOATBC-1.0-5-5"
 ):
     category_dict = {"Office_Products": "office products", "Books": "books", "steam": "games", "CDs_and_Vinyl": "musics", "Toys_and_Games": "toys and games", "Video_Games": "video games", "Musical_Instruments": "music instruments", "Sports_and_Outdoors": "sports and outdoors", "Pet_Supplies": "pet supplies", "Arts_Crafts_and_Sewing": "arts products", "STEAM": "games", "Movies": "movie",
                      "yelp": "resturant" }
-    category = category_dict[category]
+    # Use mapped name if available, else use the raw category name
+    category = category_dict.get(category, category)
 
     model = LatentModel.from_pretrained(base_model, torch_dtype=torch.bfloat16, use_flash_attention_2=False)
     model.attention.end_k = end_k
@@ -51,7 +57,17 @@ def main(
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token_id = tokenizer.eos_token_id
     tokenizer.padding_side = "left"
-    val_dataset=LatentRDataset(train_file=test_data_path, tokenizer=tokenizer,max_len=2560, category=category, test=True,K=4, seed=seed,
+    class Args:
+        def __init__(self, data_path, dataset, category=None):
+            self.data_path = data_path
+            self.dataset = dataset
+            self.category = category
+
+    if use_rmdr:
+        rmdr_args = Args(data_path, dataset, category)
+        val_dataset = RMDRDataset(args=rmdr_args, tokenizer=tokenizer, mode='test', max_len=2560, sample=sample)
+    else:
+        val_dataset=LatentRDataset(train_file=test_data_path, tokenizer=tokenizer,max_len=2560, category=category, test=True,K=4, seed=seed,
                               sample=sample)
         
     encodings = [val_dataset.__getitem__(i) for i in range(len(val_dataset))]

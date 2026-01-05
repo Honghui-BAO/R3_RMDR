@@ -36,7 +36,7 @@ class Tokenizer:
         return self.tokenizer.decode(t)
 
 class RMDRDataset(Dataset):
-    def __init__(self, args, tokenizer, mode='train', max_len=512):
+    def __init__(self, args, tokenizer, mode='train', max_len=512, sample=-1):
         super().__init__()
         self.args = args
         self.tokenizer = Tokenizer(tokenizer)
@@ -48,30 +48,87 @@ class RMDRDataset(Dataset):
         self.dataset_name = args.dataset
         self.full_data_path = os.path.join(self.data_path, self.dataset_name)
         
-        # Load item titles
-        self.iid2asin = pickle.load(open(os.path.join(self.full_data_path, "iid2asin.pkl"), 'rb'))
-        self.item_count = max(list(self.iid2asin.keys())) + 1
-        
-        self.item_metas = pickle.load(open(os.path.join(self.full_data_path, "meta_datas.pkl"), 'rb'))
+        # Load item titles (optimized: prefer pre-tokenized/extracted list)
+        self.local_path = f'local_dataset/{self.dataset_name}'
         self.item_titles = self._load_item_titles()
         
         # Load data splits
         self.data = self._load_split_data()
+        
+        # Optional Sampling for quick testing
+        if sample > 0 and len(self.data) > sample:
+            random.seed(42)
+            self.data = random.sample(self.data, sample)
+            
         self.length = len(self.data)
         
         # Category for instruction
         self.category = args.category if hasattr(args, 'category') else "items"
         
         # R3 specific: Thought token
-        # We assume tokenizer already has <|Thought|> added from latent_attention_train.py
         self.thought_token = "<|Thought|>"
         
+        # Pre-calculate inputs to avoid bottleneck during conversion to HF Dataset
+        self.inputs = []
+        self._get_inputs()
+
+    def _get_inputs(self):
+        print(f"Tokenizing {self.mode} data ({len(self.data)} samples)...")
+        for idx in tqdm(range(len(self.data)), desc=f"Processing {self.mode}"):
+            self.inputs.append(self.pre_process(idx))
+
+    def pre_process(self, idx):
+        # RMDR data format: [seq_iid_list, target_iid, seq_iid_cate_list, target_iid_cate]
+        example = self.data[idx]
+        seq_iid_list = example[0]
+        target_iid = example[1]
+        target_title = self.item_titles[target_iid]
+        
+        prompt_str, target_str = self._generate_prompt(seq_iid_list, target_title)
+        
+        # Tokenize prompt (BOS=True, EOS=False)
+        prompt_ids = self.tokenizer.encode(prompt_str, bos=True, eos=False)
+            
+        # Tokenize target (BOS=False, EOS=True)
+        # We need a newline before target as per R3's LatentRDataset
+        target_ids = self.tokenizer.encode('\n' + target_str, bos=False, eos=True)
+        
+        input_ids = prompt_ids + target_ids
+        attention_mask = [1] * len(input_ids)
+        labels = [-100] * len(prompt_ids) + target_ids
+        
+        # Truncate/Pad
+        if len(input_ids) > self.max_len:
+            input_ids = input_ids[-self.max_len:]
+            attention_mask = attention_mask[-self.max_len:]
+            labels = labels[-self.max_len:]
+            
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels
+        }
+
     def _load_item_titles(self):
-        item_title_list = ['None'] * self.item_count
-        for iid, asin in self.iid2asin.items():
-            title = self.item_metas[asin]['title'] if (
-                    'title' in self.item_metas[asin].keys() and self.item_metas[asin]['title']) else 'None'
+        title_path = os.path.join(self.local_path, "item_title_list.pkl")
+        if os.path.exists(title_path):
+            print(f"Loading item titles from {title_path}")
+            return pickle.load(open(title_path, 'rb'))
+            
+        print(f"Title list not found, extracting from meta_datas.pkl (Slow)...")
+        iid2asin = pickle.load(open(os.path.join(self.full_data_path, "iid2asin.pkl"), 'rb'))
+        item_count = max(list(iid2asin.keys())) + 1
+        item_metas = pickle.load(open(os.path.join(self.full_data_path, "meta_datas.pkl"), 'rb'))
+        
+        item_title_list = ['None'] * item_count
+        for iid, asin in iid2asin.items():
+            title = item_metas[asin]['title'] if (
+                    'title' in item_metas[asin].keys() and item_metas[asin]['title']) else 'None'
             item_title_list[iid] = title
+            
+        # Cache for next time
+        os.makedirs(self.local_path, exist_ok=True)
+        pickle.dump(item_title_list, open(title_path, 'wb'))
         return item_title_list
 
     def _load_split_data(self):
@@ -147,6 +204,25 @@ class RMDRDataset(Dataset):
     def __len__(self):
         return self.length
 
+    def get_all(self):
+        temp = []
+        for i in range(len(self.data)):
+            example = self.data[i]
+            seq_iid_list = example[0]
+            target_iid = example[1]
+            target_domain = example[3]
+            target_title = self.item_titles[target_iid]
+            
+            history = ", ".join([f'"{self.item_titles[iid]}"' for iid in seq_iid_list])
+            input_str = f"The user has enjoyed the following {self.category} recently: {history}"
+
+            temp.append({
+                "input": input_str,
+                "output": target_title,
+                "domain": target_domain
+            })
+        return temp
+
     def _generate_prompt(self, seq_iid_list, target_title):
         history = ", ".join([f'"{self.item_titles[iid]}"' for iid in seq_iid_list])
         input_str = f"The user has enjoyed the following {self.category} recently: {history}"
@@ -160,33 +236,4 @@ class RMDRDataset(Dataset):
         return full_prompt, target_title
 
     def __getitem__(self, idx):
-        # RMDR data format: [seq_iid_list, target_iid, seq_iid_cate_list, target_iid_cate]
-        example = self.data[idx]
-        seq_iid_list = example[0]
-        target_iid = example[1]
-        target_title = self.item_titles[target_iid]
-        
-        prompt_str, target_str = self._generate_prompt(seq_iid_list, target_title)
-        
-        # Tokenize prompt (BOS=True, EOS=False)
-        prompt_ids = self.tokenizer.encode(prompt_str, bos=True, eos=False)
-            
-        # Tokenize target (BOS=False, EOS=True)
-        # We need a newline before target as per R3's LatentRDataset
-        target_ids = self.tokenizer.encode('\n' + target_str, bos=False, eos=True)
-        
-        input_ids = prompt_ids + target_ids
-        attention_mask = [1] * len(input_ids)
-        labels = [-100] * len(prompt_ids) + target_ids
-        
-        # Truncate/Pad
-        if len(input_ids) > self.max_len:
-            input_ids = input_ids[-self.max_len:]
-            attention_mask = attention_mask[-self.max_len:]
-            labels = labels[-self.max_len:]
-            
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels
-        }
+        return self.inputs[idx]

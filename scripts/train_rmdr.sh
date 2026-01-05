@@ -33,4 +33,24 @@ torchrun --nproc_per_node=8 --nnodes=1 --master_port=$port \
     --sample -1 \
     > >(tee -a ${out}/${task_name}.log) 2> >(tee -a ${out}/${task_name}.err >&2)
 
-# Optional: Evaluation part can be added here similar to latent_train.sh
+# Generate items info file for evaluation
+info_file="${out}/items.txt"
+python src/utils/generate_r3_info.py --data_path $data_path --dataset $dataset --output_file ${info_file}
+
+# Run evaluation
+# Note: For simplicity, running on a single GPU. Can be parallelized similarly to latent_train.sh if needed.
+python src/latent/latent_attention_eval.py \
+    --base_model ${out} \
+    --use_rmdr True \
+    --data_path $data_path \
+    --dataset $dataset \
+    --category $category \
+    --info_file ${info_file} \
+    --result_json_data ${out}/eval_result.json \
+    --sample -1 \
+    --batch_size 32
+
+# Calculate and print metrics (including domain-specific metrics)
+python src/utils/calc.py \
+    --path ${out}/eval_result.json \
+    --item_path ${info_file}

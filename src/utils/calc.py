@@ -44,33 +44,45 @@ def gao(path, item_path):
         test_data = json.load(f)
         f.close()
         
+        domain_metrics = {} # domain -> {"NDCG": np.zeros(5), "HR": np.zeros(5), "count": 0}
+        
         text = [ [_.strip(" \n").strip("\"").strip(" ") for _ in sample["predict"]] for sample in test_data]
         
         for index, sample in tqdm(enumerate(text)):
+                domain = test_data[index].get("domain", "all")
+                if domain not in domain_metrics:
+                    domain_metrics[domain] = {"NDCG": np.zeros(5), "HR": np.zeros(5), "count": 0}
+                domain_metrics[domain]["count"] += 1
 
                 if type(test_data[index]['output']) == list:
                     target_item = test_data[index]['output'][0].strip("\"").strip(" ")
                 else:
                     target_item = test_data[index]['output'].strip(" \n\"")
                 minID = 1000000
-                # rank = dist.argsort(dim = -1)
                 for i in range(len(sample)):
-                    # for _ in item_dict[target_item]:
-                        # if rank[i][0] == _:
-                            # minID = i
-                    
                     if sample[i] not in item_dict:
                         CC += 1
-                        # print(sample[i], index)
                     if sample[i] == target_item:
                         minID = i
-                for index, topk in enumerate(topk_list):
+                for k_idx, topk in enumerate(topk_list):
                     if minID < topk:
-                        ALLNDCG[index] = ALLNDCG[index] + (1 / math.log(minID + 2))
-                        ALLHR[index] = ALLHR[index] + 1
-        print(ALLNDCG / len(text) / (1.0 / math.log(2)))
-        print(ALLHR / len(text))
-        print(CC)
+                        ALLNDCG[k_idx] = ALLNDCG[k_idx] + (1 / math.log(minID + 2))
+                        ALLHR[k_idx] = ALLHR[k_idx] + 1
+                        domain_metrics[domain]["NDCG"][k_idx] += (1 / math.log(minID + 2))
+                        domain_metrics[domain]["HR"][k_idx] += 1
+        
+        print("\nResults by Domain:")
+        for domain, metrics in domain_metrics.items():
+            count = metrics["count"]
+            print(f"Domain: {domain} (Count: {count})")
+            print(f"NDCG@1,3,5,10,20: {metrics['NDCG'] / count / (1.0 / math.log(2))}")
+            print(f"HR@1,3,5,10,20:   {metrics['HR'] / count}")
+            print("-" * 20)
+
+        print("\nOverall Results:")
+        print(f"Total NDCG@1,3,5,10,20: {ALLNDCG / len(text) / (1.0 / math.log(2))}")
+        print(f"Total HR@1,3,5,10,20:   {ALLHR / len(text)}")
+        print(f"Total OOV Items: {CC}")
 
 if __name__=='__main__':
     fire.Fire(gao)

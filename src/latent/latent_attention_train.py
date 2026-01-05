@@ -72,7 +72,7 @@ def train(
         base_model,
         # load_in_8bit=True,
         torch_dtype=torch.bfloat16,
-        # device_map=device_map,
+        device_map=device_map,
     )
     model.attention.end_k = end_k
     model.config.loss_type = "ce"
@@ -102,8 +102,8 @@ def train(
 
     if use_rmdr:
         rmdr_args = Args(data_path, dataset, category)
-        train_data = RMDRDataset(args=rmdr_args, tokenizer=tokenizer, mode='train', max_len=cutoff_len)
-        val_data = RMDRDataset(args=rmdr_args, tokenizer=tokenizer, mode='valid', max_len=cutoff_len)
+        train_data = RMDRDataset(args=rmdr_args, tokenizer=tokenizer, mode='train', max_len=cutoff_len, sample=sample)
+        val_data = RMDRDataset(args=rmdr_args, tokenizer=tokenizer, mode='valid', max_len=cutoff_len, sample=sample)
     else:
         train_data = LatentRDataset(train_file=train_file, tokenizer=tokenizer, max_len=cutoff_len,  sample=sample, seed=seed, category=category, K = K)
         val_data = LatentRDataset(train_file=eval_file, tokenizer=tokenizer, max_len=cutoff_len,  sample=sample, category=category, K = K)
