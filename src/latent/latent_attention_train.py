@@ -52,8 +52,10 @@ def train(
 ):
 
     category_dict = {"Office_Products": "office products", "Books": "books", "steam": "games", "CDs_and_Vinyl": "musics", "Toys_and_Games": "toys and games", "Video_Games": "video games", "Musical_Instruments": "music instruments", "Sports_and_Outdoors": "sports and outdoors", "Pet_Supplies": "pet supplies", "Arts_Crafts_and_Sewing": "arts products", "Movies": "movie", "yelp": "resturant"}
-    print(category)
-    category = category_dict[category]
+    print(f"Original category: {category}")
+    # Use mapped name if available, else use the raw category name
+    category = category_dict.get(category, category)
+    print(f"Used category in prompt: {category}")
     assert (
         base_model
     )

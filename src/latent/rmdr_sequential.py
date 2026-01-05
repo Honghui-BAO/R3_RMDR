@@ -86,11 +86,50 @@ class RMDRDataset(Dataset):
         
         path = os.path.join(local_path, file_name)
         if os.path.exists(path):
+            print(f"Loading split data from {path}")
             return pickle.load(open(path, 'rb'))
         else:
-            # If local split doesn't exist, we might need to implement the split logic from RMDR
-            # or expect it to be pre-generated. For now, let's assume it exists or raise error.
-            raise FileNotFoundError(f"RMDR split data not found at {path}. Please run RMDR preprocessing first.")
+            print(f"Split data not found at {path}. Generating from raw data...")
+            return self._generate_splits(local_path)[self.mode]
+
+    def _generate_splits(self, local_path):
+        os.makedirs(local_path, exist_ok=True)
+        raw_review_path = os.path.join(self.full_data_path, "review_datas.pkl")
+        if not os.path.exists(raw_review_path):
+            raise FileNotFoundError(f"Raw review data not found at {raw_review_path}")
+            
+        review_datas = pickle.load(open(raw_review_path, 'rb'))
+        train_data, valid_data, test_data = [], [], []
+
+        # Logic from RMDR data_sequential.py
+        for user in tqdm(review_datas.keys(), desc='Splitting RMDR Data'):
+            if not review_datas[user]: continue
+            
+            seq_iid_list = [review_datas[user][0][0]]
+            seq_iid_cate_list = [review_datas[user][0][2]]
+
+            for i in range(1, len(review_datas[user])):
+                target_iid = review_datas[user][i][0]
+                target_iid_cate = review_datas[user][i][2]
+                target_time = review_datas[user][i][3]
+                
+                # RMDR specific timestamps
+                if target_time < 1628643414042:
+                    train_data.append([seq_iid_list, target_iid, seq_iid_cate_list, target_iid_cate])
+                elif target_time >= 1658002729837:
+                    test_data.append([seq_iid_list, target_iid, seq_iid_cate_list, target_iid_cate])
+                else:
+                    valid_data.append([seq_iid_list, target_iid, seq_iid_cate_list, target_iid_cate])
+
+                seq_iid_list = (seq_iid_list + [target_iid])[-10:] # max_seq_length=10 in RMDR
+                seq_iid_cate_list = (seq_iid_cate_list + [target_iid_cate])[-10:]
+
+        # Save for future use
+        pickle.dump(train_data, open(os.path.join(local_path, 'train_data.pkl'), 'wb'))
+        pickle.dump(valid_data, open(os.path.join(local_path, 'valid_data.pkl'), 'wb'))
+        pickle.dump(test_data, open(os.path.join(local_path, 'test_data.pkl'), 'wb'))
+        
+        return {'train': train_data, 'valid': valid_data, 'test': test_data}
 
     def __len__(self):
         return self.length
